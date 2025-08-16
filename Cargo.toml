@@ -1,0 +1,18 @@
+[package]
+name = "ez_hpet"
+version = "1.0.0"
+edition = "2024"
+authors = ["ChocolateLoverRaj <paranjperajas@gmail.com>"]
+description = "A Rust OSDev library for using the HPET (High Precision Event Timer) in your own OS"
+license = "MIT"
+repository = "https://github.com/ChocolateLoverRaj/ez_hpet"
+keywords = ["hpet", "timer", "osdev", "x86"]
+categories = ["hardware-support", "no-std"]
+exclude = ["flake.nix", "flake.lock", ".envrc"]
+
+[dependencies]
+bitfield = { version = "0.19.1", default-features = false }
+volatile = { version = "0.6.1", default-features = false, features = [
+    "derive",
+    "unstable",
+] }
