@@ -1,5 +1,6 @@
-use core::{fmt::Debug, num::NonZero, ptr::NonNull};
+use core::{fmt::Debug, ptr::NonNull};
 
+use arbitrary_int::u5;
 use volatile::{VolatilePtr, VolatileRef, access::ReadOnly};
 
 use crate::*;
@@ -17,21 +18,14 @@ impl Hpet<'_> {
     ///
     /// # Safety
     /// The address must be a virtual address mapped to HPET memory as un-cacheable (UC).
-    pub unsafe fn new(addr: NonZero<usize>) -> Self {
+    pub unsafe fn new(ptr: NonNull<HpetMemory>) -> Self {
         Self {
-            mmio: {
-                let pointer = NonNull::new(addr.get() as *mut HpetMemory).expect("ptr is not null");
-                unsafe { VolatileRef::new(pointer) }
-            },
+            mmio: { unsafe { VolatileRef::new(ptr) } },
         }
     }
 
     pub fn vendor_id(&self) -> u16 {
-        self.mmio
-            .as_ptr()
-            .capabilities_and_id()
-            .read()
-            .get_vendor_id()
+        self.mmio.as_ptr().capabilities_and_id().read().vendor_id()
     }
 
     pub fn timers_count(&self) -> u8 {
@@ -39,7 +33,8 @@ impl Hpet<'_> {
             .as_ptr()
             .capabilities_and_id()
             .read()
-            .get_num_tim_cap()
+            .num_tim_cap()
+            .value()
             + 1
     }
 
@@ -49,15 +44,11 @@ impl Hpet<'_> {
             .as_ptr()
             .capabilities_and_id()
             .read()
-            .get_counter_clk_period()
+            .counter_clk_period()
     }
 
     pub fn legacy_replacement_capable(&self) -> bool {
-        self.mmio
-            .as_ptr()
-            .capabilities_and_id()
-            .read()
-            .get_leg_rt_cap()
+        self.mmio.as_ptr().capabilities_and_id().read().leg_rt_cap()
     }
 
     pub fn supports_64_bit_mode(&self) -> bool {
@@ -65,15 +56,15 @@ impl Hpet<'_> {
             .as_ptr()
             .capabilities_and_id()
             .read()
-            .get_count_size_cap()
+            .count_size_cap()
     }
 
     pub fn revision_id(&self) -> u8 {
-        self.mmio.as_ptr().capabilities_and_id().read().get_rev_id()
+        self.mmio.as_ptr().capabilities_and_id().read().rev_id()
     }
 
-    pub fn get_enable(&self) -> bool {
-        self.mmio.as_ptr().config().read().get_enable_cnf()
+    pub fn is_enabled(&self) -> bool {
+        self.mmio.as_ptr().config().read().enable_cnf()
     }
 
     pub fn set_enable(&mut self, enable: bool) {
@@ -90,7 +81,7 @@ impl Hpet<'_> {
 
     /// **Note**: you are not allowed to write to the main counter register while the HPET is enabled.
     pub fn set_main_counter_value(&mut self, main_counter_value: u64) {
-        if self.get_enable() {
+        if self.is_enabled() {
             panic!("Tried to set the main counter value while the HPET was enabled");
         }
         self.mmio
@@ -100,21 +91,24 @@ impl Hpet<'_> {
     }
 
     pub fn get_legacy_replacement_enabled(&self) -> bool {
-        self.mmio
-            .as_ptr()
-            .config()
-            .read()
-            .get_legacy_replacement_cnf()
+        self.mmio.as_ptr().config().read().legacy_replacement_cnf()
     }
 
-    pub fn timers(&self) -> HpetTimersIterator {
+    pub fn set_legacy_replacement_enabled(&mut self, enabled: bool) {
+        self.mmio
+            .as_mut_ptr()
+            .config()
+            .update(|reg| reg.with_legacy_replacement_cnf(enabled));
+    }
+
+    pub fn timers(&self) -> HpetTimersIterator<'_> {
         HpetTimersIterator {
             mmio: self,
             index: 0,
         }
     }
 
-    pub fn timer(&self, index: u8) -> HpetTimer {
+    pub fn timer(&self, index: u8) -> HpetTimer<'_> {
         if index >= self.timers_count() {
             panic!("Tried to access timer {index}, which is not supported by this HPET");
         }
@@ -130,6 +124,18 @@ impl Hpet<'_> {
             index,
         }
     }
+
+    /// Returns a bit map where 1 means interrupt pending.
+    /// For level interrupts, it's cleared by writing a 1 (currently unimplemented in this libraray).
+    /// For edge interrupts you don't clear it.
+    pub fn pending_interrupts(&self) -> u32 {
+        self.mmio
+            .borrow()
+            .as_ptr()
+            .interrupt_status()
+            .read()
+            .t_n_int_sts()
+    }
 }
 
 impl Debug for Hpet<'_> {
@@ -138,7 +144,7 @@ impl Debug for Hpet<'_> {
             .field("Supports 64-bit", &self.supports_64_bit_mode())
             .field("Tick Period (10^-15 s)", &self.main_counter_tick_period())
             .field("Counter Value", &self.main_counter_value())
-            .field("Enabled", &self.get_enable())
+            .field("Enabled", &self.is_enabled())
             .field_with("Timers", |f| f.debug_list().entries(self.timers()).finish())
             .finish()
     }
@@ -186,7 +192,7 @@ impl Debug for HpetTimer<'_> {
 
 impl HpetTimerRef for HpetTimer<'_> {
     #[allow(private_interfaces)]
-    fn hpet_timer(&self) -> VolatilePtr<HpetTimerMemory, ReadOnly> {
+    fn hpet_timer(&self) -> VolatilePtr<'_, HpetTimerMemory, ReadOnly> {
         self.hpet
             .mmio
             .as_ptr()
@@ -203,7 +209,7 @@ pub struct HpetTimerMut<'a> {
 
 impl HpetTimerRef for HpetTimerMut<'_> {
     #[allow(private_interfaces)]
-    fn hpet_timer(&self) -> VolatilePtr<HpetTimerMemory, ReadOnly> {
+    fn hpet_timer(&self) -> VolatilePtr<'_, HpetTimerMemory, ReadOnly> {
         self.hpet
             .as_ptr()
             .timers()
@@ -212,13 +218,16 @@ impl HpetTimerRef for HpetTimerMut<'_> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum InterruptConfig {
-    IoApic(u8),
-    Fsb(TimerNFsbInterruptRouteRegister),
+    /// Interrupts are sent through an I/O APIC, which can then route that interrupt to a Local APIC.
+    IoApic(u5),
+    /// Interrupts are directly sent to a Local APIC
+    Fsb(TimerNFsbIntRouteReg),
 }
 
 impl HpetTimerMut<'_> {
-    fn timer_mut(&mut self) -> VolatilePtr<HpetTimerMemory> {
+    fn timer_mut(&mut self) -> VolatilePtr<'_, HpetTimerMemory> {
         self.hpet
             .as_mut_ptr()
             .timers()
@@ -234,24 +243,21 @@ impl HpetTimerMut<'_> {
             InterruptConfig::IoApic(irq) => {
                 self.timer_mut()
                     .configuration_and_capability_register()
-                    .update(|mut reg| {
-                        reg.set_fsb_en_cnf(false);
-                        if reg.get_int_route_cap() & (1 << irq) == 0 {
+                    .update(|reg| {
+                        if reg.int_route_cap() & (1 << irq.value()) == 0 {
                             panic!("Unsupported IRQ");
                         }
-                        reg.set_int_route_cnf(irq);
-                        reg
+                        reg.with_fsb_en_cnf(false).with_int_route_cnf(irq)
                     });
             }
             InterruptConfig::Fsb(fsb) => {
                 self.timer_mut()
                     .configuration_and_capability_register()
-                    .update(|mut reg| {
-                        if !reg.get_fsb_int_del_cap() {
+                    .update(|reg| {
+                        if !reg.fsb_int_supported() {
                             panic!("FSB interrupts not supported by this timer");
                         }
-                        reg.set_fsb_en_cnf(true);
-                        reg
+                        reg.with_fsb_en_cnf(true)
                     });
                 self.timer_mut().fsb_interrupt_route_register().write(fsb);
             }
@@ -261,10 +267,7 @@ impl HpetTimerMut<'_> {
     pub fn set_interrupt_enable(&mut self, enable: bool) {
         self.timer_mut()
             .configuration_and_capability_register()
-            .update(|mut reg| {
-                reg.set_int_enb_cnf(enable);
-                reg
-            });
+            .update(|reg| reg.with_int_enable(enable));
     }
 
     pub fn set_comparator_value(&mut self, comparator_value: u64) {
@@ -272,58 +275,93 @@ impl HpetTimerMut<'_> {
             .comparator_register()
             .write(comparator_value);
     }
+
+    pub fn set_trigger(&mut self, trigger: InterruptTrigger) {
+        self.timer_mut()
+            .configuration_and_capability_register()
+            .update(|reg| {
+                reg.with_int_type_cnf(match trigger {
+                    InterruptTrigger::Edge => false,
+                    InterruptTrigger::Level => true,
+                })
+            });
+    }
+
+    pub fn set_mode(&mut self, interrupt_type: TimerMode) {
+        self.timer_mut()
+            .configuration_and_capability_register()
+            .update(|reg| {
+                reg.with__type_cnf(match interrupt_type {
+                    TimerMode::Oneshot => false,
+                    TimerMode::Periodic => true,
+                })
+            });
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum InterruptTrigger {
+    Level,
+    Edge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TimerMode {
+    Oneshot,
+    Periodic,
 }
 
 pub trait HpetTimerRef {
     #[allow(private_interfaces)]
-    fn hpet_timer(&self) -> VolatilePtr<HpetTimerMemory, ReadOnly>;
+    fn hpet_timer(&self) -> VolatilePtr<'_, HpetTimerMemory, ReadOnly>;
 
     fn supported_io_apic_interrupts(&self) -> u32 {
         self.hpet_timer()
             .configuration_and_capability_register()
             .read()
-            .get_int_route_cap()
+            .int_route_cap()
     }
 
     fn supports_fsb_interrupts(&self) -> bool {
         self.hpet_timer()
             .configuration_and_capability_register()
             .read()
-            .get_fsb_int_del_cap()
+            .fsb_int_supported()
     }
 
     fn supports_64_bit_mode(&self) -> bool {
         self.hpet_timer()
             .configuration_and_capability_register()
             .read()
-            .get_size_cap()
+            .size_cap()
     }
 
     fn supports_periodic_mode(&self) -> bool {
         self.hpet_timer()
             .configuration_and_capability_register()
             .read()
-            .get_per_int_cp()
+            .periodic_mode_supported()
     }
 
-    fn interrupt_mode(&self) -> InterruptMode {
+    fn interrupt_cfg(&self) -> InterruptConfig {
         if self
             .hpet_timer()
             .configuration_and_capability_register()
             .read()
-            .get_fsb_en_cnf()
+            .fsb_en_cnf()
         {
-            InterruptMode::Fsb
+            InterruptConfig::Fsb(self.hpet_timer().fsb_interrupt_route_register().read())
         } else {
-            InterruptMode::IoApic
+            InterruptConfig::IoApic(
+                self.hpet_timer()
+                    .configuration_and_capability_register()
+                    .read()
+                    .int_route_cnf(),
+            )
         }
     }
-}
 
-#[derive(Debug)]
-pub enum InterruptMode {
-    /// Interrupts are sent through an I/O APIC, which can then route that interrupt to a Local APIC.
-    IoApic,
-    /// Interrupts are directly sent to a Local APIC
-    Fsb,
+    fn comparator_value(&self) -> u64 {
+        self.hpet_timer().comparator_register().read()
+    }
 }

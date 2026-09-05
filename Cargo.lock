@@ -3,19 +3,16 @@
 version = 4
 
 [[package]]
-name = "bitfield"
-version = "0.19.1"
+name = "arbitrary-int"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db1bcd90f88eabbf0cadbfb87a45bceeaebcd3b4bc9e43da379cd2ef0162590d"
-dependencies = [
- "bitfield-macros",
-]
+checksum = "0ab387a0c4143b4fd3804e193946e78c8ab16cf26c5fde2048e4ac3d618c3b64"
 
 [[package]]
-name = "bitfield-macros"
-version = "0.19.1"
+name = "bitbybit"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3787a07661997bfc05dd3431e379c0188573f78857080cf682e1393ab8e4d64c"
+checksum = "bf218b839af0730012cc21856c4149789afde9ae6dc3078c7adaf311e8b76854"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -26,7 +23,8 @@ dependencies = [
 name = "ez_hpet"
 version = "1.0.0"
 dependencies = [
- "bitfield",
+ "arbitrary-int",
+ "bitbybit",
  "volatile",
 ]
 

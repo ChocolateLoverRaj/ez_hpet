@@ -11,7 +11,8 @@ categories = ["hardware-support", "no-std"]
 exclude = ["flake.nix", "flake.lock", ".envrc"]
 
 [dependencies]
-bitfield = { version = "0.19.1", default-features = false }
+arbitrary-int = "2.2.0"
+bitbybit = "2.0.1"
 volatile = { version = "0.6.1", default-features = false, features = [
     "derive",
     "unstable",

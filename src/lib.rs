@@ -4,5 +4,6 @@
 mod hpet;
 mod mmio;
 
+pub use arbitrary_int;
 pub use hpet::*;
 pub use mmio::*;
