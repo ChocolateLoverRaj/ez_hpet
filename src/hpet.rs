@@ -1,13 +1,16 @@
 use core::{fmt::Debug, ptr::NonNull};
 
 use arbitrary_int::u5;
-use volatile::{VolatilePtr, VolatileRef, access::ReadOnly};
+use volatile::{VolatilePtr, access::ReadOnly};
 
 use crate::*;
 
 pub struct Hpet<'a> {
-    mmio: VolatileRef<'a, HpetMemory>,
+    mmio: VolatilePtr<'a, HpetMemory>,
 }
+
+unsafe impl Send for Hpet<'_> {}
+unsafe impl Sync for Hpet<'_> {}
 
 impl Hpet<'_> {
     /// To call this function:
@@ -20,55 +23,41 @@ impl Hpet<'_> {
     /// The address must be a virtual address mapped to HPET memory as un-cacheable (UC).
     pub unsafe fn new(ptr: NonNull<HpetMemory>) -> Self {
         Self {
-            mmio: { unsafe { VolatileRef::new(ptr) } },
+            mmio: { unsafe { VolatilePtr::new(ptr) } },
         }
     }
 
     pub fn vendor_id(&self) -> u16 {
-        self.mmio.as_ptr().capabilities_and_id().read().vendor_id()
+        self.mmio.capabilities_and_id().read().vendor_id()
     }
 
     pub fn timers_count(&self) -> u8 {
-        self.mmio
-            .as_ptr()
-            .capabilities_and_id()
-            .read()
-            .num_tim_cap()
-            .value()
-            + 1
+        self.mmio.capabilities_and_id().read().num_tim_cap().value() + 1
     }
 
     /// Get the main counter tick period in femtoseconds
     pub fn main_counter_tick_period(&self) -> u32 {
-        self.mmio
-            .as_ptr()
-            .capabilities_and_id()
-            .read()
-            .counter_clk_period()
+        self.mmio.capabilities_and_id().read().counter_clk_period()
     }
 
     pub fn legacy_replacement_capable(&self) -> bool {
-        self.mmio.as_ptr().capabilities_and_id().read().leg_rt_cap()
+        self.mmio.capabilities_and_id().read().leg_rt_cap()
     }
 
     pub fn supports_64_bit_mode(&self) -> bool {
-        self.mmio
-            .as_ptr()
-            .capabilities_and_id()
-            .read()
-            .count_size_cap()
+        self.mmio.capabilities_and_id().read().count_size_cap()
     }
 
     pub fn revision_id(&self) -> u8 {
-        self.mmio.as_ptr().capabilities_and_id().read().rev_id()
+        self.mmio.capabilities_and_id().read().rev_id()
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.mmio.as_ptr().config().read().enable_cnf()
+        self.mmio.config().read().enable_cnf()
     }
 
     pub fn set_enable(&mut self, enable: bool) {
-        self.mmio.as_mut_ptr().config().update(|mut reg| {
+        self.mmio.config().update(|mut reg| {
             reg.set_enable_cnf(enable);
             reg
         });
@@ -76,7 +65,7 @@ impl Hpet<'_> {
 
     /// Note that if the HPET doesn't support 64-bit mode, then the maximum value returned by this function will be `u32::MAX`.
     pub fn main_counter_value(&self) -> u64 {
-        self.mmio.as_ptr().main_counter_value_register().read()
+        self.mmio.main_counter_value_register().read()
     }
 
     /// **Note**: you are not allowed to write to the main counter register while the HPET is enabled.
@@ -85,56 +74,53 @@ impl Hpet<'_> {
             panic!("Tried to set the main counter value while the HPET was enabled");
         }
         self.mmio
-            .as_mut_ptr()
             .main_counter_value_register()
             .write(main_counter_value);
     }
 
     pub fn get_legacy_replacement_enabled(&self) -> bool {
-        self.mmio.as_ptr().config().read().legacy_replacement_cnf()
+        self.mmio.config().read().legacy_replacement_cnf()
     }
 
     pub fn set_legacy_replacement_enabled(&mut self, enabled: bool) {
         self.mmio
-            .as_mut_ptr()
             .config()
             .update(|reg| reg.with_legacy_replacement_cnf(enabled));
     }
 
     pub fn timers(&self) -> HpetTimersIterator<'_> {
         HpetTimersIterator {
-            mmio: self,
+            hpet: self,
             index: 0,
         }
     }
 
-    pub fn timer(&self, index: u8) -> HpetTimer<'_> {
-        if index >= self.timers_count() {
-            panic!("Tried to access timer {index}, which is not supported by this HPET");
-        }
-        HpetTimer { hpet: self, index }
-    }
-
-    pub fn timer_mut<'a>(&'a mut self, index: u8) -> HpetTimerMut<'a> {
+    pub fn timer(&self, index: u8) -> HpetTimerMut<'_> {
         if index >= self.timers_count() {
             panic!("Tried to access timer {index}, which is not supported by this HPET");
         }
         HpetTimerMut {
-            hpet: self.mmio.borrow_mut(),
+            hpet: self.mmio,
             index,
         }
+    }
+
+    pub fn timer_mut<'a>(&'a mut self, index: u8) -> HpetTimerMut<'a> {
+        self.timer(index)
+        // if index >= self.timers_count() {
+        //     panic!("Tried to access timer {index}, which is not supported by this HPET");
+        // }
+        // HpetTimerMut {
+        //     hpet: self.mmio.borrow_mut(),
+        //     index,
+        // }
     }
 
     /// Returns a bit map where 1 means interrupt pending.
     /// For level interrupts, it's cleared by writing a 1 (currently unimplemented in this libraray).
     /// For edge interrupts you don't clear it.
     pub fn pending_interrupts(&self) -> u32 {
-        self.mmio
-            .borrow()
-            .as_ptr()
-            .interrupt_status()
-            .read()
-            .t_n_int_sts()
+        self.mmio.interrupt_status().read().t_n_int_sts()
     }
 }
 
@@ -151,16 +137,16 @@ impl Debug for Hpet<'_> {
 }
 
 pub struct HpetTimersIterator<'a> {
-    mmio: &'a Hpet<'a>,
+    hpet: &'a Hpet<'a>,
     index: u8,
 }
 
 impl<'a> Iterator for HpetTimersIterator<'a> {
     type Item = HpetTimer<'a>;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index < self.mmio.timers_count() {
+        if self.index < self.hpet.timers_count() {
             let hpet_timer = HpetTimer {
-                hpet: self.mmio,
+                hpet: self.hpet.mmio,
                 index: self.index,
             };
             self.index += 1;
@@ -172,7 +158,7 @@ impl<'a> Iterator for HpetTimersIterator<'a> {
 }
 
 pub struct HpetTimer<'a> {
-    hpet: &'a Hpet<'a>,
+    hpet: VolatilePtr<'a, HpetMemory>,
     index: u8,
 }
 
@@ -194,16 +180,15 @@ impl HpetTimerRef for HpetTimer<'_> {
     #[allow(private_interfaces)]
     fn hpet_timer(&self) -> VolatilePtr<'_, HpetTimerMemory, ReadOnly> {
         self.hpet
-            .mmio
-            .as_ptr()
             .timers()
             .as_slice()
             .index(self.index as usize)
+            .read_only()
     }
 }
 
 pub struct HpetTimerMut<'a> {
-    hpet: VolatileRef<'a, HpetMemory>,
+    hpet: VolatilePtr<'a, HpetMemory>,
     index: u8,
 }
 
@@ -211,10 +196,10 @@ impl HpetTimerRef for HpetTimerMut<'_> {
     #[allow(private_interfaces)]
     fn hpet_timer(&self) -> VolatilePtr<'_, HpetTimerMemory, ReadOnly> {
         self.hpet
-            .as_ptr()
             .timers()
             .as_slice()
             .index(self.index as usize)
+            .read_only()
     }
 }
 
@@ -247,11 +232,7 @@ pub enum InterruptConfig {
 
 impl HpetTimerMut<'_> {
     fn timer_mut(&mut self) -> VolatilePtr<'_, HpetTimerMemory> {
-        self.hpet
-            .as_mut_ptr()
-            .timers()
-            .as_slice()
-            .index(self.index as usize)
+        self.hpet.timers().as_slice().index(self.index as usize)
     }
 
     /// **Note**
