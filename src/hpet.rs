@@ -238,7 +238,7 @@ pub enum InterruptConfig {
     /// To use this option, the HPET must support FSB. Even when legacy replacement is enabled, you can override the interrupt route for timers 0 and 1 to use FSB instead. FSB interrupts are always edge triggered.
     Fsb {
         destination_mode: ApicDestMode,
-        redirection_int: RedirectionHint,
+        redirection_hint: RedirectionHint,
         destination_id: u8,
         interrupt_vector: u8,
         delivery_mode: DeliveryMode,
@@ -282,7 +282,7 @@ impl HpetTimerMut<'_> {
             InterruptConfig::Fsb {
                 destination_id,
                 destination_mode,
-                redirection_int,
+                redirection_hint: redirection_int,
                 interrupt_vector,
                 delivery_mode,
             } => {
