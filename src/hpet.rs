@@ -220,10 +220,29 @@ impl HpetTimerRef for HpetTimerMut<'_> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum InterruptConfig {
+    /// When legacy replacement is enabled (not supported on all machines), timer 0 is routed to I/O IRQ 2
+    /// and timer 1 is routed to I/O IRQ 8. Other timers are still routed by specifying the number (choose
+    /// one of the IRQs the timer supports).
+    ///
+    /// To use this option, you must specify timer 0 or 1 and legacy replacement must be enabled in the HPET's config.
+    LegacyReplacment { trigger: InterruptTrigger },
     /// Interrupts are sent through an I/O APIC, which can then route that interrupt to a Local APIC.
-    IoApic(u5),
-    /// Interrupts are directly sent to a Local APIC
-    Fsb(TimerNFsbIntRouteReg),
+    ///
+    /// To use this option on timers 0 or 1, legacy replacement must be disabled for the HPET overall. You can always use this option on timers 2+.
+    IoApic {
+        io_apic_irq: u5,
+        trigger: InterruptTrigger,
+    },
+    /// Interrupts are directly sent to a Local APIC.
+    ///
+    /// To use this option, the HPET must support FSB. Even when legacy replacement is enabled, you can override the interrupt route for timers 0 and 1 to use FSB instead. FSB interrupts are always edge triggered.
+    Fsb {
+        destination_mode: ApicDestMode,
+        redirection_int: RedirectionHint,
+        destination_id: u8,
+        interrupt_vector: u8,
+        delivery_mode: DeliveryMode,
+    },
 }
 
 impl HpetTimerMut<'_> {
@@ -240,17 +259,33 @@ impl HpetTimerMut<'_> {
     /// - FSB is not guaranteed to be supported.
     pub fn configure_interrupt(&mut self, interrupt_config: InterruptConfig) {
         match interrupt_config {
-            InterruptConfig::IoApic(irq) => {
+            InterruptConfig::LegacyReplacment { trigger } => {
+                self.timer_mut()
+                    .configuration_and_capability_register()
+                    .update(|reg| reg.with_int_type_cnf(trigger.into()));
+            }
+            InterruptConfig::IoApic {
+                io_apic_irq,
+                trigger,
+            } => {
                 self.timer_mut()
                     .configuration_and_capability_register()
                     .update(|reg| {
-                        if reg.int_route_cap() & (1 << irq.value()) == 0 {
+                        if reg.int_route_cap() & (1 << io_apic_irq.value()) == 0 {
                             panic!("Unsupported IRQ");
                         }
-                        reg.with_fsb_en_cnf(false).with_int_route_cnf(irq)
+                        reg.with_fsb_en_cnf(false)
+                            .with_int_route_cnf(io_apic_irq)
+                            .with_int_type_cnf(trigger.into())
                     });
             }
-            InterruptConfig::Fsb(fsb) => {
+            InterruptConfig::Fsb {
+                destination_id,
+                destination_mode,
+                redirection_int,
+                interrupt_vector,
+                delivery_mode,
+            } => {
                 self.timer_mut()
                     .configuration_and_capability_register()
                     .update(|reg| {
@@ -259,7 +294,24 @@ impl HpetTimerMut<'_> {
                         }
                         reg.with_fsb_en_cnf(true)
                     });
-                self.timer_mut().fsb_interrupt_route_register().write(fsb);
+                self.timer_mut().fsb_interrupt_route_register().write(
+                    TimerNFsbIntRouteReg::new_with_raw_value(0)
+                        .with_fsb_int_addr(
+                            FsbApicIntAddr::new_with_raw_value(0)
+                                .with_destination_mode(destination_mode.into())
+                                .with_destination_id(destination_id)
+                                .with_redirection_hint(redirection_int.into())
+                                .with_fixed_value((FsbApicIntAddr::APIC_FIXED_VALUE))
+                                .raw_value(),
+                        )
+                        .with_fsb_int_val(
+                            FsbApicIntValue::new_with_raw_value(0)
+                                .with_delivery_mode(delivery_mode.into())
+                                .with_interrupt_vector(interrupt_vector.into())
+                                .with_trigger_mode(FsbIntTriggerMode::Edge.into())
+                                .raw_value(),
+                        ),
+                );
             }
         }
     }
@@ -304,6 +356,14 @@ pub enum InterruptTrigger {
     Level,
     Edge,
 }
+impl From<InterruptTrigger> for bool {
+    fn from(value: InterruptTrigger) -> Self {
+        match value {
+            InterruptTrigger::Edge => false,
+            InterruptTrigger::Level => true,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TimerMode {
@@ -343,25 +403,26 @@ pub trait HpetTimerRef {
             .periodic_mode_supported()
     }
 
-    fn interrupt_cfg(&self) -> InterruptConfig {
-        if self
-            .hpet_timer()
-            .configuration_and_capability_register()
-            .read()
-            .fsb_en_cnf()
-        {
-            InterruptConfig::Fsb(self.hpet_timer().fsb_interrupt_route_register().read())
-        } else {
-            InterruptConfig::IoApic(
-                self.hpet_timer()
-                    .configuration_and_capability_register()
-                    .read()
-                    .int_route_cnf(),
-            )
-        }
-    }
-
     fn comparator_value(&self) -> u64 {
         self.hpet_timer().comparator_register().read()
     }
 }
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LegacyReplacementRoute {
+    pub pic8259_mapping: u8,
+    pub apic_mapping: u8,
+}
+
+/// Array with legacy routes for timer 0 (at index 0) and timer 1 (at index 1).
+pub const LEGACY_REPLACEMENT_ROUTES: [LegacyReplacementRoute; 2] = [
+    LegacyReplacementRoute {
+        pic8259_mapping: 0,
+        apic_mapping: 2,
+    },
+    LegacyReplacementRoute {
+        pic8259_mapping: 8,
+        apic_mapping: 8,
+    },
+];

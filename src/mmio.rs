@@ -1,6 +1,6 @@
 use core::mem::MaybeUninit;
 
-use arbitrary_int::u5;
+use arbitrary_int::{u3, u5, u12};
 use bitbybit::bitfield;
 use volatile::{
     VolatileFieldAccess,
@@ -183,4 +183,110 @@ pub struct TimerNFsbIntRouteReg {
     /// > message should be written to.
     #[bits(32..=63, rw)]
     pub fsb_int_addr: u32,
+}
+
+#[bitfield(u32, debug)]
+pub struct FsbApicIntValue {
+    #[bits(0..=7, rw)]
+    pub interrupt_vector: u8,
+    #[bits(8..=10, rw)]
+    pub delivery_mode: u3,
+    #[bit(14, rw)]
+    pub level: bool,
+    #[bit(15, rw)]
+    pub trigger_mode: bool,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DeliveryMode {
+    Fixed,
+    LowestPriority,
+    Smi,
+    Nmi,
+    Init,
+    ExInit,
+}
+impl From<DeliveryMode> for u3 {
+    fn from(value: DeliveryMode) -> Self {
+        Self::new(value as u8)
+    }
+}
+
+#[repr(u8)]
+pub enum ApicIntLevel {
+    Low,
+    High,
+}
+impl From<ApicIntLevel> for bool {
+    fn from(value: ApicIntLevel) -> Self {
+        match value {
+            ApicIntLevel::Low => false,
+            ApicIntLevel::High => true,
+        }
+    }
+}
+
+#[repr(u8)]
+pub enum FsbIntTriggerMode {
+    Edge,
+    Level,
+}
+impl From<FsbIntTriggerMode> for bool {
+    fn from(value: FsbIntTriggerMode) -> Self {
+        match value {
+            FsbIntTriggerMode::Edge => false,
+            FsbIntTriggerMode::Level => true,
+        }
+    }
+}
+
+#[bitfield(u32, debug)]
+pub struct FsbApicIntAddr {
+    /// 0: physical APIC ID.
+    /// 1: logical APIC ID.
+    #[bit(2, rw)]
+    destination_mode: bool,
+    /// 0: directed to desination ID.
+    /// 1:Lowest priority CPU in destination group.
+    #[bit(3, rw)]
+    redirection_hint: bool,
+    #[bits(12..=19, rw)]
+    destination_id: u8,
+    #[bits(20..=31, rw)]
+    fixed_value: u12,
+}
+
+impl FsbApicIntAddr {
+    pub const APIC_FIXED_VALUE: u12 = u12::new(0xFEE);
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ApicDestMode {
+    Physical,
+    Logical,
+}
+impl From<ApicDestMode> for bool {
+    fn from(value: ApicDestMode) -> Self {
+        match value {
+            ApicDestMode::Physical => false,
+            ApicDestMode::Logical => true,
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RedirectionHint {
+    DestId,
+    LowestPriorityCpu,
+}
+impl From<RedirectionHint> for bool {
+    fn from(value: RedirectionHint) -> Self {
+        match value {
+            RedirectionHint::DestId => false,
+            RedirectionHint::LowestPriorityCpu => true,
+        }
+    }
 }
